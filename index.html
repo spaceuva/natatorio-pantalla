@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Natatorio · Control de Ingreso</title>
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+  <style>
+    :root { --bg:#0f172a; --txt:#e2e8f0; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; }
+    body {
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg); color: var(--txt);
+      display: flex; flex-direction: column; align-items: center;
+      min-height: 100%; padding: 16px; overflow: hidden;
+    }
+    header { text-align: center; margin-bottom: 12px; }
+    header h1 { font-size: 1.3rem; font-weight: 700; }
+    header p { font-size: .9rem; opacity: .7; margin-top: 2px; }
+    #reader {
+      width: min(92vw, 420px); border-radius: 16px; overflow: hidden;
+      border: 3px solid #334155; background: #000; display: block;
+    }
+    #canvas { display: none; }
+    #hint { margin-top: 14px; font-size: 1rem; opacity: .8; text-align: center; max-width: 92vw; }
+
+    #overlay {
+      position: fixed; inset: 0; display: none;
+      flex-direction: column; align-items: center; justify-content: center;
+      text-align: center; padding: 24px; z-index: 10;
+    }
+    #overlay.show { display: flex; }
+    #overlay .icon { font-size: 5rem; line-height: 1; }
+    #overlay .nombre { font-size: 2.2rem; font-weight: 800; margin-top: 12px; }
+    #overlay .detalle { font-size: 1.25rem; margin-top: 10px; max-width: 90vw; }
+    #overlay .estado { font-size: 1rem; margin-top: 18px; text-transform: uppercase; letter-spacing: 2px; opacity: .85; }
+    .ok       { background: #14532d; }
+    .vencido  { background: #7f1d1d; }
+    .revision { background: #78350f; }
+    .error    { background: #334155; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Natatorio · Control de Ingreso</h1>
+    <p>Acercá tu carnet QR a la cámara</p>
+  </header>
+
+  <video id="reader" playsinline muted></video>
+  <canvas id="canvas"></canvas>
+  <div id="hint">Iniciando…</div>
+
+  <div id="overlay">
+    <div class="icon"></div>
+    <div class="nombre"></div>
+    <div class="detalle"></div>
+    <div class="estado"></div>
+  </div>
+
+  <script>
+    // ================== CONFIG ==================
+    // Al hospedar la página fuera de n8n, poné la URL COMPLETA del webhook de ingreso:
+    const INGRESO_URL = "https://n8nnow-n8n.fm8oz8.easypanel.host/webhook/ingreso";
+    const RESULT_SECONDS = 3;
+    const REPEAT_LOCK_MS = 4000;
+    // ============================================
+
+    const overlay = document.getElementById("overlay");
+    const hint = document.getElementById("hint");
+    const video = document.getElementById("reader");
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    let busy = false, lastCode = null, lastTime = 0, scanning = false;
+
+    function beep(ok) {
+      try {
+        const c = new (window.AudioContext || window.webkitAudioContext)();
+        const o = c.createOscillator(), g = c.createGain();
+        o.connect(g); g.connect(c.destination);
+        o.frequency.value = ok ? 880 : 220;
+        o.start(); g.gain.setValueAtTime(0.2, c.currentTime);
+        g.gain.exponentialRampToValueAtTime(0.001, c.currentTime + 0.3);
+        o.stop(c.currentTime + 0.3);
+      } catch (e) {}
+    }
+
+    function mostrar(data) {
+      const estado = (data && data.estado) || "error";
+      let cls = "error", icon = "⚠️";
+      if (estado === "ok")        { cls = "ok";       icon = data.apto_ok === false ? "✅⚠️" : "✅"; }
+      else if (estado === "vencido")  { cls = "vencido";  icon = "❌"; }
+      else if (estado === "revision") { cls = "revision"; icon = "🔎"; }
+      overlay.className = "show " + cls;
+      overlay.querySelector(".icon").textContent = icon;
+      overlay.querySelector(".nombre").textContent = data.nombre || "—";
+      overlay.querySelector(".detalle").textContent = data.detalle || "";
+      overlay.querySelector(".estado").textContent = estado;
+      beep(estado === "ok");
+      setTimeout(() => { overlay.className = ""; busy = false; hint.textContent = "Escaneando…"; }, RESULT_SECONDS * 1000);
+    }
+
+    async function onScan(codigo) {
+      const ahora = Date.now();
+      if (busy) return;
+      if (codigo === lastCode && (ahora - lastTime) < REPEAT_LOCK_MS) return;
+      busy = true; lastCode = codigo; lastTime = ahora;
+      hint.textContent = "Verificando…";
+      try {
+        const resp = await fetch(INGRESO_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ codigo: codigo })
+        });
+        const data = await resp.json();
+        mostrar(data);
+      } catch (e) {
+        mostrar({ estado: "error", nombre: "Error", detalle: "No se pudo conectar con el servidor", apto_ok: true });
+      }
+    }
+
+    function tick() {
+      if (!scanning) return;
+      if (video.readyState === video.HAVE_ENOUGH_DATA) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const code = jsQR(img.data, img.width, img.height, { inversionAttempts: "dontInvert" });
+        if (code && code.data && !busy) onScan(code.data.trim());
+      }
+      requestAnimationFrame(tick);
+    }
+
+    async function iniciar() {
+      // Diagnóstico: si el navegador no expone la cámara, lo decimos claro.
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        hint.textContent = "El navegador no expone la cámara. Secure context: "
+          + window.isSecureContext + " · mediaDevices: " + !!navigator.mediaDevices;
+        return;
+      }
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: "environment" } },
+          audio: false
+        });
+        video.srcObject = stream;
+        await video.play();
+        scanning = true;
+        hint.textContent = "Escaneando…";
+        requestAnimationFrame(tick);
+      } catch (err) {
+        hint.textContent = "Error de cámara: " + (err && err.name ? err.name : "?")
+          + " — " + (err && err.message ? err.message : err);
+      }
+    }
+
+    iniciar();
+  </script>
+</body>
+</html>
