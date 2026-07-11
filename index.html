@@ -90,6 +90,7 @@
       let cls = "error", icon = "⚠️";
       if (estado === "ok")        { cls = "ok";       icon = data.apto_ok === false ? "✅⚠️" : "✅"; }
       else if (estado === "vencido")  { cls = "vencido";  icon = "❌"; }
+      else if (estado === "sin_cupo") { cls = "vencido";  icon = "🚫"; }
       else if (estado === "revision") { cls = "revision"; icon = "🔎"; }
       overlay.className = "show " + cls;
       overlay.querySelector(".icon").textContent = icon;
