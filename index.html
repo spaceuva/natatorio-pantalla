@@ -64,6 +64,7 @@
     const INGRESO_URL = "https://n8nnow-n8n.fm8oz8.easypanel.host/webhook/ingreso";
     const RESULT_SECONDS = 3;
     const REPEAT_LOCK_MS = 4000;
+    const FETCH_TIMEOUT_MS = 10000;
     // ============================================
 
     const overlay = document.getElementById("overlay");
@@ -107,16 +108,26 @@
       if (codigo === lastCode && (ahora - lastTime) < REPEAT_LOCK_MS) return;
       busy = true; lastCode = codigo; lastTime = ahora;
       hint.textContent = "Verificando…";
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
       try {
         const resp = await fetch(INGRESO_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ codigo: codigo })
+          body: JSON.stringify({ codigo: codigo }),
+          signal: controller.signal
         });
-        const data = await resp.json();
+        clearTimeout(timeoutId);
+        const data = await resp.json().catch(() => null);
+        if (!resp.ok) {
+          mostrar({ estado: "error", nombre: "Error", detalle: (data && data.message) || ("Error del servidor (HTTP " + resp.status + ")"), apto_ok: true });
+          return;
+        }
         mostrar(data);
       } catch (e) {
-        mostrar({ estado: "error", nombre: "Error", detalle: "No se pudo conectar con el servidor", apto_ok: true });
+        clearTimeout(timeoutId);
+        const detalle = (e && e.name === "AbortError") ? "El servidor no respondió a tiempo" : "No se pudo conectar con el servidor";
+        mostrar({ estado: "error", nombre: "Error", detalle, apto_ok: true });
       }
     }
 
